@@ -75,6 +75,24 @@ export function esbuildDepPlugin(
     return resolver(id, _importer, undefined)
   }
 
+  const resolveResult = (id: string, resolved: string) => {
+    if (resolved.startsWith(browserExternalId)) {
+      return {
+        path: id,
+        namespace: 'browser-external'
+      }
+    }
+    if (isExternalUrl(resolved)) {
+      return {
+        path: resolved,
+        external: true
+      }
+    }
+    return {
+      path: path.resolve(resolved)
+    }
+  }
+
   return {
     name: 'vite:dep-pre-bundle',
     setup(build) {
@@ -129,21 +147,7 @@ export function esbuildDepPlugin(
           // use vite's own resolver
           const resolved = await resolve(id, importer, kind)
           if (resolved) {
-            if (resolved.startsWith(browserExternalId)) {
-              return {
-                path: id,
-                namespace: 'browser-external'
-              }
-            }
-            if (isExternalUrl(resolved)) {
-              return {
-                path: resolved,
-                external: true
-              }
-            }
-            return {
-              path: path.resolve(resolved)
-            }
+            return resolveResult(id, resolved)
           }
         }
       )
@@ -195,30 +199,32 @@ export function esbuildDepPlugin(
         }
       })
 
-      build.onLoad(
-        { filter: /.*/, namespace: 'browser-external' },
-        ({ path: id }) => {
-          return {
-            contents:
-              `export default new Proxy({}, {
-  get() {
-    throw new Error('Module "${id}" has been externalized for ` +
-              `browser compatibility and cannot be accessed in client code.')
-  }
-})`
-          }
-        }
-      )
+      // Returning empty contents that will be turned by ESBuild
+      // into a CommonJS module exporting an empty object.
+      // This is what ESBuild does when bundling a dependency
+      // starting from a non-browser-external entrypoint.
+      build.onLoad({ filter: /.*/, namespace: 'browser-external' }, () => {
+        return { contents: '' }
+      })
 
       // yarn 2 pnp compat
       if (isRunningWithYarnPnp) {
         build.onResolve(
           { filter: /.*/ },
-          async ({ path, importer, kind, resolveDir }) => ({
-            // pass along resolveDir for entries
-            path: await resolve(path, importer, kind, resolveDir)
-          })
+          async ({ path: id, importer, kind, resolveDir, namespace }) => {
+            const resolved = await resolve(
+              id,
+              importer,
+              kind,
+              // pass along resolveDir for entries
+              namespace === 'dep' ? resolveDir : undefined
+            )
+            if (resolved) {
+              return resolveResult(id, resolved)
+            }
+          }
         )
+
         build.onLoad({ filter: /.*/ }, async (args) => ({
           contents: await require('fs').promises.readFile(args.path),
           loader: 'default'
