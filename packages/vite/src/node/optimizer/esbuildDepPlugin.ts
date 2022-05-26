@@ -76,6 +76,24 @@ export function esbuildDepPlugin(
     return resolver(id, _importer, undefined)
   }
 
+  const resolveResult = (id: string, resolved: string) => {
+    if (resolved.startsWith(browserExternalId)) {
+      return {
+        path: id,
+        namespace: 'browser-external'
+      }
+    }
+    if (isExternalUrl(resolved)) {
+      return {
+        path: resolved,
+        external: true
+      }
+    }
+    return {
+      path: path.resolve(resolved)
+    }
+  }
+
   return {
     name: 'vite:dep-pre-bundle',
     setup(build) {
@@ -130,21 +148,7 @@ export function esbuildDepPlugin(
           // use vite's own resolver
           const resolved = await resolve(id, importer, kind)
           if (resolved) {
-            if (resolved.startsWith(browserExternalId)) {
-              return {
-                path: id,
-                namespace: 'browser-external'
-              }
-            }
-            if (isExternalUrl(resolved)) {
-              return {
-                path: resolved,
-                external: true
-              }
-            }
-            return {
-              path: path.resolve(resolved)
-            }
+            return resolveResult(id, resolved)
           }
         }
       )
@@ -237,10 +241,18 @@ module.exports = Object.create(new Proxy({}, {
       if (isRunningWithYarnPnp) {
         build.onResolve(
           { filter: /.*/ },
-          async ({ path, importer, kind, resolveDir }) => ({
-            // pass along resolveDir for entries
-            path: await resolve(path, importer, kind, resolveDir)
-          })
+          async ({ path: id, importer, kind, resolveDir, namespace }) => {
+            const resolved = await resolve(
+              id,
+              importer,
+              kind,
+              // pass along resolveDir for entries
+              namespace === 'dep' ? resolveDir : undefined
+            )
+            if (resolved) {
+              return resolveResult(id, resolved)
+            }
+          }
         )
         build.onLoad({ filter: /.*/ }, async (args) => ({
           contents: await fs.readFile(args.path),
